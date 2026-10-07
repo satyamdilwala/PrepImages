@@ -23,6 +23,7 @@ import urllib.request
 
 REPO = pathlib.Path(__file__).resolve().parent
 BASE_URL = "https://sfprep.fqrs.co.in"
+PAGES_ORIGIN = "https://satyamdilwala.github.io"
 MAX_BYTES = 3 * 1024 * 1024
 SIGNATURES = [(b"\x89PNG", "png"), (b"\xff\xd8\xff", "jpg"), (b"GIF8", "gif")]
 
@@ -39,6 +40,16 @@ def kind(data):
 
 def git(*args):
     return subprocess.run(["git", "-C", str(REPO), *args], check=True, capture_output=True, text=True).stdout
+
+
+def live(rel):
+    req = urllib.request.Request(f"{PAGES_ORIGIN}/{rel}", method="HEAD",
+                                 headers={"Host": BASE_URL.split("//")[1], "User-Agent": "Mozilla/5.0 PrepImages-upload"})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as res:
+            return res.status == 200
+    except Exception:
+        return False
 
 
 def main(argv):
@@ -82,18 +93,10 @@ def main(argv):
                     git("pull", "-q", "--rebase", "--autostash", "origin", "main")
 
     if wait:
+        # Poll GitHub Pages directly: asking the public URL before the deploy finishes makes
+        # Cloudflare cache the 404 for minutes.
         for r in results:
-            for _ in range(60):
-                try:
-                    req = urllib.request.Request(r["url"], method="HEAD", headers={"User-Agent": "Mozilla/5.0 PrepImages-upload"})
-                    with urllib.request.urlopen(req, timeout=10) as res:
-                        if res.status == 200:
-                            break
-                except Exception:
-                    pass
-                time.sleep(5)
-            else:
-                r["live"] = False
+            r["live"] = any(live(r["path"]) or time.sleep(5) for _ in range(60))
 
     for r in results:
         print(json.dumps(r))
