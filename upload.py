@@ -51,7 +51,7 @@ def main(argv):
 
     with open(REPO / ".git" / "upload.lock", "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        git("pull", "-q", "--rebase", "origin", "main")
+        git("pull", "-q", "--rebase", "--autostash", "origin", "main")
         results, added = [], []
         for f in files:
             data = f.read_bytes()
@@ -79,13 +79,14 @@ def main(argv):
                     if attempt == 4:
                         raise
                     time.sleep(2 + attempt * 2)
-                    git("pull", "-q", "--rebase", "origin", "main")
+                    git("pull", "-q", "--rebase", "--autostash", "origin", "main")
 
     if wait:
         for r in results:
             for _ in range(60):
                 try:
-                    with urllib.request.urlopen(urllib.request.Request(r["url"], method="HEAD"), timeout=10) as res:
+                    req = urllib.request.Request(r["url"], method="HEAD", headers={"User-Agent": "Mozilla/5.0 PrepImages-upload"})
+                    with urllib.request.urlopen(req, timeout=10) as res:
                         if res.status == 200:
                             break
                 except Exception:
