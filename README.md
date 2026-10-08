@@ -4,8 +4,8 @@ Public images used by SF Prep (prep.fqrs.co.in) questions and notes, served by G
 **https://sfprep.fqrs.co.in** (see `CNAME`). A file at `images/x/y.webp` is live at
 `https://sfprep.fqrs.co.in/images/x/y.webp` about a minute after it is pushed.
 
-- `images/branding/` — SF Prep logos
-- `images/books/<bookId>/<chapter>/` — question figures
+- `images/books/<bookId>/<chapter>/` — school book question figures
+- `images/jee/<exam>/<subject>/<chapter>/` — cleaned JEE Main/Advanced question images
 
 ## Rules for every image
 
