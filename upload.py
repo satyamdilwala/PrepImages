@@ -6,36 +6,63 @@
     folder  where the images go under images/, e.g. books/ncert-3-maths-mela/ch01
     --wait  block until every URL is live on GitHub Pages (usually under a minute)
 
+Every image is stored as lossless WebP, at most 800 px wide (wider images are scaled down,
+narrower ones are left at their size). Any PNG/JPEG/GIF/WebP input is accepted and converted.
+Needs Pillow: python3 -m pip install Pillow
+
 File names get a content hash, so uploading the same image again returns the same URL.
 Safe to run from many agents at once: uploads are serialised with a lock and pushed with retries.
-Prints one JSON object per file: {"file", "path", "url", "new"}.
+Prints one JSON object per file: {"file", "path", "url", "new", "width", "height"}.
 """
 import fcntl
 import hashlib
+import io
 import json
 import pathlib
 import re
-import shutil
 import subprocess
 import sys
 import time
 import urllib.request
 
+try:
+    from PIL import Image
+except ImportError:
+    sys.exit("upload.py needs Pillow to convert images to WebP: python3 -m pip install Pillow")
+
 REPO = pathlib.Path(__file__).resolve().parent
 BASE_URL = "https://sfprep.fqrs.co.in"
 PAGES_ORIGIN = "https://satyamdilwala.github.io"
+MAX_WIDTH = 800
+MAX_INPUT_BYTES = 30 * 1024 * 1024
 MAX_BYTES = 3 * 1024 * 1024
-SIGNATURES = [(b"\x89PNG", "png"), (b"\xff\xd8\xff", "jpg"), (b"GIF8", "gif")]
 
 
 def slug(s):
     return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")
 
 
-def kind(data):
-    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
-        return "webp"
-    return next((ext for sig, ext in SIGNATURES if data.startswith(sig)), None)
+def to_webp(f):
+    """The image as lossless WebP, scaled down to MAX_WIDTH; exits on anything unusable."""
+    if f.stat().st_size > MAX_INPUT_BYTES:
+        sys.exit(f"{f}: larger than 30 MB")
+    try:
+        with Image.open(f) as im:
+            if getattr(im, "n_frames", 1) > 1:
+                sys.exit(f"{f}: animated images are not supported")
+            im.load()
+            alpha = im.mode in ("RGBA", "LA") or (im.mode == "P" and "transparency" in im.info)
+            im = im.convert("RGBA" if alpha else "RGB")
+    except OSError:
+        sys.exit(f"{f}: not an image Pillow can read")
+    if im.width > MAX_WIDTH:
+        im = im.resize((MAX_WIDTH, max(1, round(im.height * MAX_WIDTH / im.width))), Image.LANCZOS)
+    buf = io.BytesIO()
+    im.save(buf, "WEBP", lossless=True, quality=100, method=5)
+    data = buf.getvalue()
+    if len(data) > MAX_BYTES:
+        sys.exit(f"{f}: still over 3 MB as an {im.width}px WebP")
+    return data, im.size
 
 
 def git(*args):
@@ -60,26 +87,24 @@ def main(argv):
     folder = "/".join(slug(p) for p in args[0].split("/") if slug(p))
     files = [pathlib.Path(f) for f in args[1:]]
     blobs = []
-    for f in files:  # check every file before touching the repo, so a bad one leaves nothing half-done
-        data = f.read_bytes()
-        ext = kind(data)
-        if ext is None or len(data) > MAX_BYTES:
-            sys.exit(f"{f}: not a PNG/JPEG/WebP/GIF under 3 MB")
-        blobs.append((f, data, ext))
+    for f in files:  # convert every file before touching the repo, so a bad one leaves nothing half-done
+        data, size = to_webp(f)
+        blobs.append((f, data, size))
 
     with open(REPO / ".git" / "upload.lock", "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         git("pull", "-q", "--rebase", "--autostash", "origin", "main")
         results = []
-        for f, data, ext in blobs:
-            name = f"{slug(f.stem)}-{hashlib.sha256(data).hexdigest()[:10]}.{ext}"
+        for f, data, (width, height) in blobs:
+            name = f"{slug(f.stem)}-{hashlib.sha256(data).hexdigest()[:10]}.webp"
             rel = f"images/{folder}/{name}"
             dest = REPO / rel
             new = not dest.exists()
             if new:
                 dest.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(f, dest)
-            results.append({"file": str(f), "path": rel, "url": f"{BASE_URL}/{rel}", "new": new})
+                dest.write_bytes(data)
+            results.append({"file": str(f), "path": rel, "url": f"{BASE_URL}/{rel}", "new": new,
+                            "width": width, "height": height})
 
         # also picks up files an interrupted run copied but never committed
         git("add", *{r["path"] for r in results})
