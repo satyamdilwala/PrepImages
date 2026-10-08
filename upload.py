@@ -59,16 +59,19 @@ def main(argv):
         sys.exit(__doc__)
     folder = "/".join(slug(p) for p in args[0].split("/") if slug(p))
     files = [pathlib.Path(f) for f in args[1:]]
+    blobs = []
+    for f in files:  # check every file before touching the repo, so a bad one leaves nothing half-done
+        data = f.read_bytes()
+        ext = kind(data)
+        if ext is None or len(data) > MAX_BYTES:
+            sys.exit(f"{f}: not a PNG/JPEG/WebP/GIF under 3 MB")
+        blobs.append((f, data, ext))
 
     with open(REPO / ".git" / "upload.lock", "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         git("pull", "-q", "--rebase", "--autostash", "origin", "main")
-        results, added = [], []
-        for f in files:
-            data = f.read_bytes()
-            ext = kind(data)
-            if ext is None or len(data) > MAX_BYTES:
-                sys.exit(f"{f}: not a PNG/JPEG/WebP/GIF under 3 MB")
+        results = []
+        for f, data, ext in blobs:
             name = f"{slug(f.stem)}-{hashlib.sha256(data).hexdigest()[:10]}.{ext}"
             rel = f"images/{folder}/{name}"
             dest = REPO / rel
@@ -76,11 +79,12 @@ def main(argv):
             if new:
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(f, dest)
-                added.append(rel)
             results.append({"file": str(f), "path": rel, "url": f"{BASE_URL}/{rel}", "new": new})
 
+        # also picks up files an interrupted run copied but never committed
+        git("add", *{r["path"] for r in results})
+        added = [p for p in git("diff", "--cached", "--name-only").splitlines() if p]
         if added:
-            git("add", *added)
             git("commit", "-q", "-m", f"Add {len(added)} image(s) to images/{folder}")
             for attempt in range(5):
                 try:
