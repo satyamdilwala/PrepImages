@@ -12,6 +12,10 @@ Public images used by SF Prep (prep.fqrs.co.in) questions and notes, served by G
 - **WebP only.** Every image in this repo is a lossless `.webp`.
 - **At most 800 px wide.** Students read on phones, tablets and laptops; 800 px is sharp on all
   of them and keeps pages light. Narrower images keep their own size and are never enlarged.
+- **One file per picture.** The same image is never stored twice. `upload.py` finds an identical
+  image anywhere in the repo and returns its URL instead of adding a copy, even for another
+  question or folder. A file can therefore be shared by many questions: delete one only after
+  checking that no question shows it.
 - **Always add images with `upload.py`.** It converts any PNG/JPEG/GIF/WebP to an 800 px-max
   lossless WebP itself, so pass the original file. Do not commit image files by hand or through
   the GitHub web UI: that skips the conversion.

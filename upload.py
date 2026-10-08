@@ -10,7 +10,8 @@ Every image is stored as lossless WebP, at most 800 px wide (wider images are sc
 narrower ones are left at their size). Any PNG/JPEG/GIF/WebP input is accepted and converted.
 Needs Pillow: python3 -m pip install Pillow
 
-File names get a content hash, so uploading the same image again returns the same URL.
+File names end in a content hash, and an image already anywhere in the repo is never stored twice:
+uploading the same picture again (for any question, into any folder) returns the existing URL.
 Safe to run from many agents at once: uploads are serialised with a lock and pushed with retries.
 Prints one JSON object per file: {"file", "path", "url", "new", "width", "height"}.
 """
@@ -62,11 +63,31 @@ def to_webp(f):
     data = buf.getvalue()
     if len(data) > MAX_BYTES:
         sys.exit(f"{f}: still over 3 MB as an {im.width}px WebP")
-    return data, im.size
+    return data, im.size, pixel_hash(im)
+
+
+def pixel_hash(im):
+    """Hash of what the image looks like, so a picture gets the same name however it was encoded."""
+    im = im.convert("RGBA")
+    return hashlib.sha256(f"{im.size}".encode() + im.tobytes()).hexdigest()[:10]
 
 
 def git(*args):
     return subprocess.run(["git", "-C", str(REPO), *args], check=True, capture_output=True, text=True).stdout
+
+
+def same_pixels(path, h):
+    with Image.open(path) as im:
+        return pixel_hash(im) == h
+
+
+def existing_by_hash():
+    """Repo paths of every stored image, keyed by the pixel hash at the end of its name."""
+    stored = {}
+    for p in (REPO / "images").rglob("*.webp"):
+        h = p.stem.rsplit("-", 1)[-1]
+        stored.setdefault(h, []).append(p.relative_to(REPO).as_posix())
+    return stored
 
 
 def live(rel):
@@ -88,21 +109,22 @@ def main(argv):
     files = [pathlib.Path(f) for f in args[1:]]
     blobs = []
     for f in files:  # convert every file before touching the repo, so a bad one leaves nothing half-done
-        data, size = to_webp(f)
-        blobs.append((f, data, size))
+        blobs.append((f, *to_webp(f)))
 
     with open(REPO / ".git" / "upload.lock", "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         git("pull", "-q", "--rebase", "--autostash", "origin", "main")
+        stored = existing_by_hash()
         results = []
-        for f, data, (width, height) in blobs:
-            name = f"{slug(f.stem)}-{hashlib.sha256(data).hexdigest()[:10]}.webp"
-            rel = f"images/{folder}/{name}"
-            dest = REPO / rel
-            new = not dest.exists()
+        for f, data, (width, height), h in blobs:
+            same = next((p for p in stored.get(h, []) if same_pixels(REPO / p, h)), None)
+            rel = same or f"images/{folder}/{slug(f.stem)}-{h}.webp"
+            new = same is None
             if new:
+                dest = REPO / rel
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 dest.write_bytes(data)
+                stored.setdefault(h, []).append(rel)
             results.append({"file": str(f), "path": rel, "url": f"{BASE_URL}/{rel}", "new": new,
                             "width": width, "height": height})
 
